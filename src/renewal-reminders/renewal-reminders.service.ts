@@ -5,10 +5,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { paginated } from '../common/dto/pagination-query.dto';
 import { todayLocal } from '../common/utils/dates';
 import { capacityLabel } from '../common/utils/labels';
+import { CUSTOMER_NAME_SELECT } from '../common/utils/customer';
 import { ReminderQueryDto } from './dto/renewal-reminder.dto';
 
 const INCLUDE = {
-  customer: { select: { id: true, firstName: true, lastName: true, phone: true, email: true } },
+  customer: { select: { ...CUSTOMER_NAME_SELECT, email: true } },
   extinguisher: { include: { capacity: { include: { type: true } } } },
   saleItem: { select: { id: true, saleId: true, description: true, chargeDate: true } },
 } satisfies Prisma.RenewalReminderInclude;

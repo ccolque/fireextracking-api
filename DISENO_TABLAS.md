@@ -96,7 +96,7 @@ unique(type_id, capacity). Etiqueta calculada para la ficha y pantallas: `ABC x 
 | Tipo | Unidad | Capacidades |
 |---|---|---|
 | ABC polvo | kg | 1, 2.5, 5, 10, 25, 50, 100 |
-| BC polvo | kg | 1, 2.5, 5, 10, 25, 50, 100 *(asumidas iguales a ABC; a confirmar)* |
+| BC polvo | kg | 1, 2.5, 5, 10, 25, 50, 100 *(confirmado: iguales a ABC)* |
 | BC anhídrido carbónico | kg | 2, 3, 3.5, 5, 7, 10, 20, 45 |
 | HCFC | kg | 2.5, 5, 10 |
 | K | lts | 6 |
@@ -110,14 +110,19 @@ Los precios se cargan después desde el front (el Administrador). El precio del 
 ### `customers` (clientes)
 | Campo | Tipo | Notas |
 |---|---|---|
-| first_name | varchar(120) | **Obligatorio** |
-| last_name | varchar(120) | **Obligatorio** |
+| customer_type | enum `PERSON`\|`COMPANY` | Default `PERSON` (persona humana / persona jurídica) |
+| first_name | varchar(120) null | **Obligatorio si PERSON**; en COMPANY siempre null |
+| last_name | varchar(120) null | **Obligatorio si PERSON**; en COMPANY siempre null |
+| business_name | varchar(200) null | **Razón social. Obligatoria si COMPANY** |
+| cuit | varchar(11) null | Solo dígitos, con dígito verificador válido. **Obligatorio si COMPANY**, opcional en PERSON. Sin unique en BD (por el borrado lógico); la API rechaza duplicados activos (409) |
 | phone | varchar(30) | **Obligatorio** (para contactar renovaciones) |
 | address | varchar(255) null | Opcional (*Domicilio* de la ficha) |
 | email | varchar(255) null | Opcional (el front enviará los PDF) |
 | notes | varchar(500) null | |
 
-Índices: `phone`, `(last_name, first_name)`.
+Índices: `phone`, `(last_name, first_name)`, `business_name`, `cuit`.
+Check en BD `customers_type_required_fields_chk`: PERSON exige nombre y apellido; COMPANY exige razón social y CUIT y no tiene nombre ni apellido.
+La API devuelve además `displayName` (calculado, no se guarda): razón social para COMPANY, "Nombre Apellido" para PERSON.
 
 ### `extinguishers` (envases)
 Envase físico. Se crea en el momento de la venta/recarga si hace falta.
@@ -129,11 +134,20 @@ Envase físico. Se crea en el momento de la venta/recarga si hace falta.
 | serial_number | varchar(60) null | *Extintor N°* |
 | manufacture_date | date null | *Fecha Fabric.* |
 | hydraulic_test_due_date | date null | *Vto. Prueba Hidra.* |
-| brand | varchar(80) null | |
+| brand_id | uuid FK brands null | Marca |
+| license_plate | varchar(10) null | Última patente informada (matafuegos de 1 kg). Se usa para precargar en las recargas |
 | status | enum | `IN_STOCK`, `SOLD`, `CUSTOMER_OWNED`, `OUT_OF_SERVICE` |
 | notes | varchar(500) null | |
 
-Índices: `serial_number`, `customer_id`.
+Índices: `serial_number`, `customer_id`, `brand_id`.
+El N° de serie es opcional en la tabla pero la API lo exige al vender o recargar un matafuego.
+
+### `brands` (marcas)
+| Campo | Tipo | Notas |
+|---|---|---|
+| name | varchar(80) | Único entre las marcas activas (lo valida la API, sin distinguir mayúsculas) |
+
+Solo `name` más los campos de auditoría y borrado lógico comunes. Índice: `name`.
 
 > Recargas: hoy el cliente deja su envase y se lleva otro. Se registra como ítem `RECHARGE` sobre el envase del cliente; el manejo del "canje" queda para una etapa posterior.
 
@@ -151,13 +165,49 @@ Envase físico. Se crea en el momento de la venta/recarga si hace falta.
 | status | enum | `ACTIVE`, `CANCELLED` |
 | notes | varchar(500) null | |
 
+### `products` (productos y kits)
+Los matafuegos **no** están acá: son tipo + capacidad (`extinguisher_capacities`).
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| kind | enum | `PRODUCT` o `KIT` |
+| name | varchar(120) | **Obligatorio**, único entre los activos (lo valida la API) |
+| price | decimal(12,2) | **Obligatorio**. En un `KIT` es el precio fijo del kit |
+| stock | int null | **Obligatorio en `PRODUCT`** (>= 0). En `KIT` es null: se calcula con sus componentes |
+| brand_id | uuid FK brands null | Opcional |
+| is_active | boolean default true | |
+
+Checks en BD: precio >= 0; `PRODUCT` exige stock >= 0; `KIT` no tiene stock. Índices: `name`, `brand_id`.
+
+### `product_kit_items` (componentes de un kit)
+| Campo | Tipo | Notas |
+|---|---|---|
+| kit_id | uuid FK products | El kit |
+| product_id | uuid FK products null | Componente producto (no puede ser otro kit) |
+| capacity_id | uuid FK extinguisher_capacities null | Componente matafuego (tipo + capacidad) |
+| quantity | int >= 1 | |
+
+Check: exactamente uno de `product_id` / `capacity_id`.
+
+### `stock_movements` (historial de stock, inmutable)
+| Campo | Tipo | Notas |
+|---|---|---|
+| product_id | uuid FK products | |
+| delta | int | Positivo suma, negativo resta |
+| stock_after | int | Stock resultante |
+| reason | enum | `INITIAL`, `ADJUSTMENT`, `SALE`, `SALE_CANCELLED` |
+| sale_item_id | uuid FK sale_items null | Línea de venta que lo originó |
+| notes | varchar(255) null | |
+
 ### `sale_items` (detalle; una ficha por ítem con envase)
 | Campo | Tipo | Notas |
 |---|---|---|
 | sale_id | uuid FK sales | |
 | extinguisher_id | uuid FK extinguishers null | Null si no es matafuego |
 | capacity_id | uuid FK extinguisher_capacities null | Origen del precio sugerido |
-| item_type | enum | `NEW_SALE`, `RECHARGE`, `OTHER` |
+| product_id | uuid FK products null | Producto o kit vendido |
+| parent_item_id | uuid FK sale_items null | Si es componente de un kit, apunta a la línea `KIT` que lo contiene |
+| item_type | enum | `NEW_SALE`, `RECHARGE`, `PRODUCT`, `KIT`, `OTHER` |
 | description | varchar(255) | Renglón del comprobante ("Matafuego ABC x 5 kg") |
 | quantity | int default 1 | |
 | unit_price | decimal(12,2) | Editable |
@@ -166,6 +216,7 @@ Envase físico. Se crea en el momento de la venta/recarga si hace falta.
 | expiration_date | date null | **Vencimiento Cargas** = `charge_date + 1 año` |
 | tag_owner_name | varchar(240) null | *Propietario* impreso (snapshot) |
 | tag_address | varchar(255) null | *Domicilio* impreso (snapshot) |
+| tag_license_plate | varchar(10) null | *Patente* impresa (snapshot). La API la exige en matafuegos de 1 kg |
 | tag_printed_at | timestamptz null | |
 | tag_print_count | int default 0 | |
 
@@ -250,7 +301,7 @@ El número se toma e incrementa dentro de una transacción para no repetir. Reem
 
 ## 8. Decisiones confirmadas
 
-- Capacidades de BC polvo = las de ABC polvo (el usuario corregirá si no es así).
+- Capacidades de BC polvo = las de ABC polvo (confirmado por el negocio).
 - Aviso de renovación: 2 o 3 **días** antes (default 3, configurable).
 - Precio de venta y de recarga separados; los carga el Administrador.
 - Comprobante parcial = "Recibo de pago". Formato `0001-00000001`.

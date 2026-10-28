@@ -17,11 +17,14 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ROLE_ADMIN } from '../common/constants';
 import { paginated } from '../common/dto/pagination-query.dto';
+import { CUSTOMER_NAME_SELECT } from '../common/utils/customer';
+import { normalizeLicensePlate } from '../common/utils/license-plate';
 import { CreateExtinguisherDto, ExtinguisherQueryDto, UpdateExtinguisherDto } from './dto/extinguisher.dto';
 
 const INCLUDE = {
   capacity: { include: { type: true } },
-  customer: { select: { id: true, firstName: true, lastName: true, phone: true } },
+  brand: { select: { id: true, name: true } },
+  customer: { select: CUSTOMER_NAME_SELECT },
 } satisfies Prisma.ExtinguisherInclude;
 
 function toDates(dto: { manufactureDate?: string; hydraulicTestDueDate?: string }) {
@@ -37,14 +40,24 @@ function toDates(dto: { manufactureDate?: string; hydraulicTestDueDate?: string 
 export class ExtinguishersController {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** ?search busca por Nº de extintor; ?customerId filtra por dueño. */
+  /**
+   * ?search busca por Nº de serie o por cliente (nombre/razón social, varias palabras);
+   * ?customerId filtra por dueño.
+   */
   @Get()
   async list(@Query() q: ExtinguisherQueryDto) {
     const where: Prisma.ExtinguisherWhereInput = {
       isDeleted: false,
       ...(q.customerId ? { customerId: q.customerId } : {}),
-      ...(q.search ? { serialNumber: { contains: q.search.trim(), mode: 'insensitive' } } : {}),
     };
+    const search = q.search?.trim();
+    if (search) {
+      const words = search.split(/\s+/);
+      where.OR = [
+        { serialNumber: { contains: search, mode: 'insensitive' } },
+        { AND: words.map((w) => ({ customer: { displayName: { contains: w, mode: 'insensitive' as const } } })) },
+      ];
+    }
     const [data, total] = await this.prisma.client.$transaction([
       this.prisma.client.extinguisher.findMany({
         where,
@@ -71,9 +84,14 @@ export class ExtinguishersController {
   @Roles(ROLE_ADMIN)
   @Post()
   create(@Body() dto: CreateExtinguisherDto, @CurrentUser('userId') actorId: string) {
-    const { manufactureDate, hydraulicTestDueDate, ...rest } = dto;
+    const { manufactureDate, hydraulicTestDueDate, licensePlate, ...rest } = dto;
     return this.prisma.client.extinguisher.create({
-      data: { ...rest, ...toDates({ manufactureDate, hydraulicTestDueDate }), createdBy: actorId },
+      data: {
+        ...rest,
+        licensePlate: normalizeLicensePlate(licensePlate),
+        ...toDates({ manufactureDate, hydraulicTestDueDate }),
+        createdBy: actorId,
+      },
       include: INCLUDE,
     });
   }
@@ -86,10 +104,15 @@ export class ExtinguishersController {
     @CurrentUser('userId') actorId: string,
   ) {
     await this.findOne(id);
-    const { manufactureDate, hydraulicTestDueDate, ...rest } = dto;
+    const { manufactureDate, hydraulicTestDueDate, licensePlate, ...rest } = dto;
     return this.prisma.client.extinguisher.update({
       where: { id },
-      data: { ...rest, ...toDates({ manufactureDate, hydraulicTestDueDate }), updatedBy: actorId },
+      data: {
+        ...rest,
+        ...(licensePlate !== undefined ? { licensePlate: normalizeLicensePlate(licensePlate) ?? null } : {}),
+        ...toDates({ manufactureDate, hydraulicTestDueDate }),
+        updatedBy: actorId,
+      },
       include: INCLUDE,
     });
   }

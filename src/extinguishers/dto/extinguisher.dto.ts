@@ -20,8 +20,13 @@ export class CreateExtinguisherDto {
   @IsOptional() @IsDateString()
   hydraulicTestDueDate?: string;
 
-  @IsOptional() @IsString() @MaxLength(80)
-  brand?: string;
+  /** Obligatoria al crear (en PATCH sigue siendo opcional: hay envases viejos sin marca). */
+  @IsUUID()
+  brandId: string;
+
+  /** Patente (matafuegos de 1 kg). */
+  @IsOptional() @IsString() @MaxLength(12)
+  licensePlate?: string;
 
   @IsOptional() @IsEnum(ExtinguisherStatus)
   status?: ExtinguisherStatus;
@@ -33,6 +38,7 @@ export class CreateExtinguisherDto {
 export class UpdateExtinguisherDto extends PartialType(CreateExtinguisherDto) {}
 
 export class ExtinguisherQueryDto extends PaginationQueryDto {
+  /** Filtra por dueño (para recargas: los matafuegos que ya tiene el cliente). */
   @IsOptional() @IsUUID()
   customerId?: string;
 }

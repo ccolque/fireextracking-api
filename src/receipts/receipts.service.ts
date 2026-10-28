@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, ReceiptType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { BusinessSettingsService } from '../business-settings/business-settings.service';
+import { CUSTOMER_NAME_SELECT } from '../common/utils/customer';
 
 export interface IssueReceiptInput {
   type: ReceiptType;
@@ -55,7 +56,7 @@ export class ReceiptsService {
     return this.prisma.client.receipt.findMany({
       where: { isDeleted: false, ...(saleId ? { saleId } : {}) },
       orderBy: { issuedAt: 'desc' },
-      include: { customer: { select: { id: true, firstName: true, lastName: true } } },
+      include: { customer: { select: CUSTOMER_NAME_SELECT } },
     });
   }
 

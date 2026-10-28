@@ -3,9 +3,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ROLE_ADMIN } from '../common/constants';
-import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { CustomersService } from './customers.service';
-import { CreateCustomerDto, UpdateCustomerDto } from './dto/customer.dto';
+import { CreateCustomerDto, CustomerQueryDto, UpdateCustomerDto } from './dto/customer.dto';
 
 @ApiTags('customers')
 @ApiBearerAuth()
@@ -13,15 +12,21 @@ import { CreateCustomerDto, UpdateCustomerDto } from './dto/customer.dto';
 export class CustomersController {
   constructor(private readonly customers: CustomersService) {}
 
-  /** Busqueda por nombre, apellido o telefono (?search=juan perez). */
+  /** Busqueda por nombre, apellido, razon social, CUIT o telefono (?search=juan perez). */
   @Get()
-  list(@Query() q: PaginationQueryDto) {
+  list(@Query() q: CustomerQueryDto) {
     return this.customers.list(q);
   }
 
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.customers.findOne(id);
+  }
+
+  /** Matafuegos que ya tiene el cliente (sin paginar): para armar una recarga. */
+  @Get(':id/extinguishers')
+  extinguishers(@Param('id', ParseUUIDPipe) id: string) {
+    return this.customers.extinguishers(id);
   }
 
   @Post()
