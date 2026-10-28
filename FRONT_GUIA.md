@@ -75,10 +75,10 @@ El login devuelve `role` y `permissions` (lista de strings, ej. `sales.create`);
 - Lista: `GET /renewal-reminders` (por defecto trae `NOTIFIED`; filtrar con `?status=`). Cada aviso trae cliente (nombre, teléfono, email), envase y fecha de vencimiento.
 - Después de llamar al cliente: `PATCH /renewal-reminders/:id/contacted` con `notes`. Si no corresponde: `/dismiss`.
 - Si el cliente renueva, se registra una venta con ítem `RECHARGE` de ese `extinguisherId` y el aviso pasa solo a `RENEWED`.
-- Un job diario (6 am) marca los avisos; `POST /renewal-reminders/check` lo fuerza.
+- **No depende de ningún job**: la API calcula el estado con la fecha de aviso (`notifyFrom`). `NOTIFIED` ("a contactar") = aviso abierto (`PENDING` o `NOTIFIED`) con `notifyFrom` <= hoy, incluidos los ya vencidos; `PENDING` = programado, con `notifyFrom` en el futuro. Los avisos devuelven siempre el estado calculado, así que un aviso que ya corresponde contactar viene como `NOTIFIED` aunque en la base siga `PENDING`. `POST /renewal-reminders/check` ya no es necesario.
 
 ### 4.4 Configuración *(admin)*
-`PATCH /business-settings` permite ajustar: nombre/domicilio/teléfono (salen en ficha y comprobantes), `pointOfSale` (default `0001`), `facturaXNextNumber` y `reciboPagoXNextNumber` (próximo número, default 1), `renewalNoticeDays` (días de anticipación, default 3), `tagValidityMonths` (vigencia, default 12).
+`PATCH /business-settings` permite ajustar: nombre/domicilio/teléfono (salen en ficha y comprobantes), `pointOfSale` (default `0001`), `facturaXNextNumber` y `reciboPagoXNextNumber` (próximo número, default 1), `renewalNoticeDays` (días de anticipación, default 3; **al guardarlo con este campo se recalculan todos los avisos abiertos**: `notifyFrom = vencimiento − días`, los que todavía no llegaron a esa fecha vuelven a `PENDING` y los `CONTACTED`/`RENEWED`/`DISMISSED` no se tocan), `tagValidityMonths` (vigencia, default 12).
 Formato de número de comprobante: `{pointOfSale}-{number}` → `0001-00000001`.
 
 ## 5. Endpoints

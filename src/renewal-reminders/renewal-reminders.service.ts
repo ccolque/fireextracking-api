@@ -14,6 +14,31 @@ const INCLUDE = {
   saleItem: { select: { id: true, saleId: true, description: true, chargeDate: true } },
 } satisfies Prisma.RenewalReminderInclude;
 
+/**
+ * "A contactar" (NOTIFIED) no depende de que un job haya cambiado el estado: es todo aviso abierto
+ * (PENDING o NOTIFIED) cuya fecha de aviso (notify_from) ya llego. "Programados" (PENDING) son los
+ * que todavia no. Los demas estados se filtran tal cual.
+ */
+function statusFilter(status: ReminderStatus, today: Date): Prisma.RenewalReminderWhereInput {
+  if (status === ReminderStatus.NOTIFIED) {
+    return {
+      status: { in: [ReminderStatus.PENDING, ReminderStatus.NOTIFIED] },
+      notifyFrom: { lte: today },
+    };
+  }
+  if (status === ReminderStatus.PENDING) {
+    return { status: ReminderStatus.PENDING, notifyFrom: { gt: today } };
+  }
+  return { status };
+}
+
+/** Estado "real": un PENDING cuya fecha de aviso ya llego cuenta como NOTIFIED. */
+function effectiveStatus(r: { status: ReminderStatus; notifyFrom: Date }, today: Date): ReminderStatus {
+  return r.status === ReminderStatus.PENDING && r.notifyFrom.getTime() <= today.getTime()
+    ? ReminderStatus.NOTIFIED
+    : r.status;
+}
+
 @Injectable()
 export class RenewalRemindersService implements OnApplicationBootstrap {
   private readonly logger = new Logger(RenewalRemindersService.name);
@@ -28,7 +53,10 @@ export class RenewalRemindersService implements OnApplicationBootstrap {
     }
   }
 
-  /** Marca como NOTIFIED los avisos cuya fecha de aviso ya llego. */
+  /**
+   * Marca como NOTIFIED los avisos cuya fecha de aviso ya llego (deja la fecha en notified_at).
+   * Las pantallas no dependen de este job: calculan el estado con notify_from.
+   */
   @Cron('0 6 * * *', { timeZone: 'America/Argentina/Salta' })
   async notifyDue() {
     const res = await this.prisma.client.renewalReminder.updateMany({
@@ -44,9 +72,10 @@ export class RenewalRemindersService implements OnApplicationBootstrap {
   }
 
   async list(q: ReminderQueryDto) {
+    const today = todayLocal();
     const where: Prisma.RenewalReminderWhereInput = {
       isDeleted: false,
-      status: q.status ?? ReminderStatus.NOTIFIED,
+      ...statusFilter(q.status ?? ReminderStatus.NOTIFIED, today),
     };
     const [data, total] = await this.prisma.client.$transaction([
       this.prisma.client.renewalReminder.findMany({
@@ -58,7 +87,11 @@ export class RenewalRemindersService implements OnApplicationBootstrap {
       }),
       this.prisma.client.renewalReminder.count({ where }),
     ]);
-    return paginated(data, total, q);
+    return paginated(
+      data.map((r) => ({ ...r, status: effectiveStatus(r, today) })),
+      total,
+      q,
+    );
   }
 
   /**
@@ -67,7 +100,8 @@ export class RenewalRemindersService implements OnApplicationBootstrap {
    */
   async listGrouped(q: ReminderQueryDto) {
     const status = q.status ?? ReminderStatus.NOTIFIED;
-    const where: Prisma.RenewalReminderWhereInput = { isDeleted: false, status };
+    const today = todayLocal();
+    const where: Prisma.RenewalReminderWhereInput = { isDeleted: false, ...statusFilter(status, today) };
 
     const keys = await this.prisma.client.renewalReminder.groupBy({
       by: ['customerId', 'dueDate'],
@@ -99,7 +133,7 @@ export class RenewalRemindersService implements OnApplicationBootstrap {
         reminderIds: items.map((r) => r.id),
         reminders: items.map((r) => ({
           id: r.id,
-          status: r.status,
+          status: effectiveStatus(r, today),
           notes: r.notes,
           notifyFrom: r.notifyFrom,
           extinguisher: {
@@ -120,13 +154,18 @@ export class RenewalRemindersService implements OnApplicationBootstrap {
 
   /** Cantidad de grupos (cliente + fecha) por estado: lo que realmente hay que contactar. */
   async summaryGrouped() {
+    const today = todayLocal();
     const rows = await this.prisma.client.renewalReminder.groupBy({
-      by: ['status', 'customerId', 'dueDate'],
+      by: ['status', 'customerId', 'dueDate', 'notifyFrom'],
       where: { isDeleted: false },
     });
+    const groups = new Map<ReminderStatus, Set<string>>();
+    for (const s of Object.values(ReminderStatus)) groups.set(s, new Set());
+    for (const r of rows) {
+      groups.get(effectiveStatus(r, today))!.add(`${r.customerId}|${r.dueDate.getTime()}`);
+    }
     const out: Record<string, number> = {};
-    for (const s of Object.values(ReminderStatus)) out[s] = 0;
-    for (const r of rows) out[r.status] += 1;
+    for (const [status, set] of groups) out[status] = set.size;
     return out;
   }
 
@@ -155,14 +194,15 @@ export class RenewalRemindersService implements OnApplicationBootstrap {
 
   /** Cantidad por estado, para la campana/badge del sistema. */
   async summary() {
+    const today = todayLocal();
     const rows = await this.prisma.client.renewalReminder.groupBy({
-      by: ['status'],
+      by: ['status', 'notifyFrom'],
       where: { isDeleted: false },
       _count: { _all: true },
     });
     const out: Record<string, number> = {};
     for (const s of Object.values(ReminderStatus)) out[s] = 0;
-    for (const r of rows) out[r.status] = r._count._all;
+    for (const r of rows) out[effectiveStatus(r, today)] += r._count._all;
     return out;
   }
 

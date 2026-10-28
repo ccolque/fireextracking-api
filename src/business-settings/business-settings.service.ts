@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { todayLocal } from '../common/utils/dates';
 import { UpdateBusinessSettingsDto } from './dto/business-settings.dto';
 
 @Injectable()
@@ -25,15 +26,19 @@ export class BusinessSettingsService {
         where: { id: current.id },
         data,
       });
-      if (
-        dto.renewalNoticeDays !== undefined &&
-        dto.renewalNoticeDays !== current.renewalNoticeDays
-      ) {
-        // Recalcula la fecha de aviso de los vencimientos que aun no se notificaron.
+      if (dto.renewalNoticeDays !== undefined) {
+        // Recalcula la fecha de aviso de los vencimientos abiertos (PENDING y NOTIFIED).
+        // Los que ya no llegaron a su nueva fecha vuelven a PENDING; CONTACTED, RENEWED y
+        // DISMISSED no se tocan. Es idempotente, asi que tambien sirve para "reacomodar" avisos.
+        const today = todayLocal();
         await tx.$executeRaw`
           UPDATE renewal_reminders
-          SET notify_from = due_date - ${dto.renewalNoticeDays}::int
-          WHERE status = 'PENDING' AND is_deleted = false`;
+          SET notify_from = due_date - ${dto.renewalNoticeDays}::int,
+              status = CASE WHEN due_date - ${dto.renewalNoticeDays}::int <= ${today}::date
+                            THEN status ELSE 'PENDING'::"ReminderStatus" END,
+              notified_at = CASE WHEN due_date - ${dto.renewalNoticeDays}::int <= ${today}::date
+                                 THEN notified_at ELSE NULL END
+          WHERE status IN ('PENDING', 'NOTIFIED') AND is_deleted = false`;
       }
       return updated;
     });

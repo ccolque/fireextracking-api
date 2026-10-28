@@ -267,7 +267,7 @@ Al registrar/anular un pago se recalculan `paid_amount`, `balance_amount` y `pay
 | renewed_sale_item_id | uuid null | Recarga que lo cerró |
 | notes | varchar(500) null | |
 
-Un job diario (`@nestjs/schedule`) toma los avisos `PENDING` con `notify_from <= hoy`, los pasa a `NOTIFIED` y quedan visibles en el sistema (panel "Por vencer" con cliente y teléfono). Solo notificación **dentro del sistema** por ahora. Como los días de anticipación son configurables, al cambiarlos se recalcula `notify_from` de los avisos aún pendientes.
+El panel "A contactar" (cliente y teléfono) **no depende de un job**: muestra los avisos abiertos (`PENDING` o `NOTIFIED`) con `notify_from <= hoy`, y la API devuelve ese estado calculado. El job diario (`@nestjs/schedule`) solo deja constancia pasando esos avisos a `NOTIFIED` con `notified_at`. Solo notificación **dentro del sistema** por ahora. Como los días de anticipación son configurables, al guardar `renewal_notice_days` se recalcula `notify_from` de los avisos abiertos (`PENDING` y `NOTIFIED`): los que todavía no llegaron a su nueva fecha vuelven a `PENDING` (con `notified_at` en null) y `CONTACTED`, `RENEWED` y `DISMISSED` no se modifican.
 
 ### `business_settings` (datos del negocio y configuración – una sola fila)
 | Campo | Tipo | Notas |
